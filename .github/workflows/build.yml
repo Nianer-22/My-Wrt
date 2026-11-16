@@ -11,7 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -115,3 +115,26 @@ jobs:
           path: output/*
           if-no-files-found: error
           retention-days: 14
+        
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: OpenWrt-${{ inputs.version }}-build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: OpenWrt ${{ inputs.version }} x86_64 UEFI EXT4 1GB
+          body: |
+            OpenWrt 25.12 x86_64 Custom Firmware
+
+            - Architecture: x86_64
+            - Boot: UEFI
+            - Image: COMBINED-EFI
+            - Filesystem: EXT4
+            - Root filesystem target: 1024 MB
+            - LAN IP: 192.168.100.1
+
+          files: |
+            output/*.img.gz
+            output/sha256sums.txt
+
+          draft: false
+          prerelease: false
+          generate_release_notes: true
