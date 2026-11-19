@@ -17,13 +17,11 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # 1. Checkout configuration repository
       - name: Checkout Configuration
         uses: actions/checkout@v4
         with:
           path: config-repo
 
-      # 2. Checkout ImmortalWrt source
       - name: Checkout ImmortalWrt
         uses: actions/checkout@v4
         with:
@@ -31,65 +29,27 @@ jobs:
           ref: v25.12.2
           path: openwrt
 
-      # 3. Install build dependencies
       - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            clang \
-            flex \
-            bison \
-            g++ \
-            gawk \
-            gcc-multilib \
-            g++-multilib \
-            gettext \
-            git \
-            libncurses-dev \
-            libssl-dev \
-            python3 \
-            python3-dev \
-            python3-setuptools \
-            python3-pyelftools \
-            python3-pip \
-            python3-ply \
-            python3-docutils \
-            rsync \
-            unzip \
-            zlib1g-dev \
-            file \
-            wget \
-            curl \
-            jq \
-            zstd \
-            swig \
-            time \
-            device-tree-compiler \
-            ecj \
-            libelf-dev \
-            libglib2.0-dev \
-            libgmp3-dev \
-            libmpc-dev \
-            libmpfr-dev \
-            libpython3-dev \
-            libreadline-dev \
-            libtool \
-            libyaml-dev \
-            pkgconf \
-            qemu-utils \
-            re2c \
-            squashfs-tools \
-            subversion
+            build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git \
+            libncurses-dev libssl-dev libelf-dev \
+            python3 python3-dev python3-pip \
+            python3-setuptools python3-pyelftools \
+            python3-yaml python3-requests \
+            rsync unzip zlib1g-dev file wget curl \
+            jq zstd swig time device-tree-compiler \
+            qemu-utils subversion
 
-      # 4. Update feeds
       - name: Update Feeds
         working-directory: openwrt
         run: |
+          set -e
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 5. Load firmware configuration
       - name: Load Configuration
         working-directory: openwrt
         run: |
@@ -104,7 +64,7 @@ jobs:
 
           make defconfig
 
-          echo "Checking firmware configuration..."
+          echo "Checking configuration..."
 
           grep -Fx 'CONFIG_TARGET_x86_64=y' .config
           grep -Fx 'CONFIG_TARGET_ROOTFS_EXT4FS=y' .config
@@ -113,49 +73,52 @@ jobs:
 
           echo "Configuration check passed!"
 
-      # 6. Download packages
       - name: Download Packages
         working-directory: openwrt
         run: |
           make download -j8
 
-      # 7. Compile firmware
       - name: Compile Firmware
         working-directory: openwrt
         run: |
           make -j"$(nproc)" || {
-            echo "Parallel build failed. Retrying with single thread..."
+            echo "Parallel compilation failed."
+            echo "Retrying with single thread..."
             make -j1 V=s
           }
 
-      # 8. Check firmware
       - name: Check Firmware
         run: |
-          set -e
+          set -euo pipefail
 
           cd openwrt/bin/targets/x86/64
 
-          ls -lh
-
           IMAGE=$(find . -maxdepth 1 \
             -type f \
-            -name '*ext4-combined-efi.img.gz' | head -n 1)
+            -name '*ext4-combined-efi.img.gz' \
+            | head -n 1)
 
           if [ -z "$IMAGE" ]; then
-            echo "ERROR: EXT4 EFI image not found!"
+            echo "ERROR: EFI EXT4 image not found!"
+            ls -lh
             exit 1
           fi
 
-          echo "Checking gzip integrity..."
-          gzip -t "$IMAGE"
+          echo "Firmware: $IMAGE"
 
-          echo "Firmware found: $IMAGE"
+          gzip -t "$IMAGE"
 
           sha256sum "$IMAGE" > sha256sums.txt
 
-          echo "Firmware verification completed!"
+          gzip -dc "$IMAGE" > firmware.img
 
-      # 9. Upload build artifacts
+          sfdisk --dump firmware.img > partition-table.txt
+
+          echo "Partition table:"
+          cat partition-table.txt
+
+          echo "Firmware verification completed."
+
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -165,12 +128,12 @@ jobs:
             openwrt/bin/targets/x86/64/*.manifest
             openwrt/bin/targets/x86/64/config.buildinfo
             openwrt/bin/targets/x86/64/sha256sums.txt
+            openwrt/bin/targets/x86/64/partition-table.txt
           if-no-files-found: error
           retention-days: 14
 
-      # 10. Release firmware
       - name: Release Firmware
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: immortalwrt-25.12.2-${{ github.run_id }}-${{ github.run_attempt }}
           name: ImmortalWrt 25.12.2 X86_64 Build ${{ github.run_number }}
@@ -180,7 +143,7 @@ jobs:
             Architecture: x86_64
             Image: EXT4-COMBINED-EFI
             Boot: UEFI
-            RootFS partition: 1024 MB
+            RootFS partition target: 1024 MB
             LAN: 10.10.10.1
 
             Automatically built by GitHub Actions.
@@ -189,5 +152,6 @@ jobs:
             openwrt/bin/targets/x86/64/*.manifest
             openwrt/bin/targets/x86/64/config.buildinfo
             openwrt/bin/targets/x86/64/sha256sums.txt
+            openwrt/bin/targets/x86/64/partition-table.txt
           fail_on_unmatched_files: true
           generate_release_notes: false
