@@ -2,18 +2,14 @@
 #!/bin/bash
 set -e
 
-# ==========================================
-# ImmortalWrt 25.12.2 X86_64
-# Custom LAN configuration
-# ==========================================
+# ImmortalWrt 25.12.2
+# x86_64 UEFI EXT4
 
 LAN_IP="10.10.10.1"
 LAN_NETMASK="255.255.255.0"
 
-# Create first-boot configuration directory
 mkdir -p files/etc/uci-defaults
 
-# Configure LAN IP on first boot
 cat > files/etc/uci-defaults/99-custom-network <<EOF
 #!/bin/sh
 
@@ -26,8 +22,4 @@ EOF
 
 chmod 755 files/etc/uci-defaults/99-custom-network
 
-echo "======================================"
-echo "Custom configuration completed"
-echo "LAN IP: ${LAN_IP}"
-echo "Netmask: ${LAN_NETMASK}"
-echo "======================================"
+echo "LAN configuration prepared: ${LAN_IP}"
