@@ -109,7 +109,7 @@ jobs:
           ls -lh
 
       - name: Upload firmware
-        uses: actions/upload-artifact@v6
+        uses: actions/checkout@v7
         with:
           name: OpenWrt-25.12-x86_64-UEFI-EXT4-1GB
           path: output/*
