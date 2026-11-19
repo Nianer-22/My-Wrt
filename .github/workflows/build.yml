@@ -67,6 +67,7 @@ jobs:
             jq \
             zstd \
             swig \
+            fdisk \
             time \
             xsltproc \
             device-tree-compiler
