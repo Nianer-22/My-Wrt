@@ -1,0 +1,103 @@
+
+name: ImmortalWrt x86_64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VERSION: "25.12.2"
+  ROOTFS_PARTSIZE: "1024"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+
+      - name: Download ImageBuilder
+        run: |
+          wget -q \
+          https://downloads.immortalwrt.org/releases/${VERSION}/targets/x86/64/immortalwrt-imagebuilder-${VERSION}-x86-64.Linux-x86_64.tar.zst \
+          -O imagebuilder.tar.zst
+
+          tar --zstd -xf imagebuilder.tar.zst
+
+      - name: Configure LAN
+        run: |
+          mkdir -p files/etc/uci-defaults
+
+          cat > files/etc/uci-defaults/99-custom-network <<'EOF'
+          #!/bin/sh
+
+          uci set network.lan.ipaddr='10.10.10.1'
+          uci set network.lan.netmask='255.255.255.0'
+          uci commit network
+
+          exit 0
+          EOF
+
+          chmod +x files/etc/uci-defaults/99-custom-network
+
+      - name: Build firmware
+        run: |
+          cd immortalwrt-imagebuilder-*
+
+          make image \
+            PROFILE="generic" \
+            ROOTFS_PARTSIZE=${ROOTFS_PARTSIZE} \
+            FILES="${GITHUB_WORKSPACE}/files" \
+            PACKAGES="luci"
+
+      - name: Check firmware
+        run: |
+          mkdir -p release
+
+          find immortalwrt-imagebuilder-*/bin/targets/x86/64 \
+            -type f \
+            -name '*squashfs-combined-efi.img.gz' \
+            -exec cp {} release/ \;
+
+          test -n "$(find release -name '*.img.gz' -print -quit)"
+
+          cd release
+          sha256sum *.img.gz > sha256sums.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ImmortalWrt-x86_64
+          path: release/*
+          retention-days: 7
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          echo "tag=ImmortalWrt-${VERSION}-$(date -u +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ImmortalWrt ${{ env.VERSION }} x86_64
+          body: |
+            ImmortalWrt x86_64 Custom Firmware
+
+            Version: ${{ env.VERSION }}
+            Architecture: x86_64
+            Filesystem: EXT4
+            Boot: UEFI
+            Root filesystem partition: 1024 MB
+            LAN IP: 10.10.10.1/24
+
+          files: release/*
+          generate_release_notes: true
