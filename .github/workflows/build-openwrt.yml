@@ -18,9 +18,13 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      # 1. Install dependencies
       - name: Install dependencies
         run: |
+          set -e
+
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             libncurses-dev \
@@ -41,11 +45,17 @@ jobs:
             tar \
             jq
 
+      # 2. Download ImageBuilder
       - name: Download ImageBuilder
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          set -e
+          set -euo pipefail
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid OpenWrt version"
+            exit 1
+          fi
 
           BUILDER="openwrt-imagebuilder-${VERSION}-x86-64.Linux-x86_64.tar.zst"
 
@@ -53,11 +63,17 @@ jobs:
 
           wget -O "$BUILDER" "$URL"
 
-          mkdir imagebuilder
+          mkdir -p imagebuilder
+
           tar --zstd -xf "$BUILDER" -C imagebuilder
 
+          echo "ImageBuilder downloaded successfully"
+
+      # 3. Prepare first boot configuration
       - name: Prepare first boot configuration
         run: |
+          set -e
+
           mkdir -p files/etc/uci-defaults
 
           cat > files/etc/uci-defaults/99-set-lan <<'EOF'
@@ -72,11 +88,23 @@ jobs:
 
           chmod 755 files/etc/uci-defaults/99-set-lan
 
+      # 4. Build OpenWrt firmware
       - name: Build OpenWrt firmware
         run: |
-          set -e
+          set -euo pipefail
 
-          cd imagebuilder/openwrt-imagebuilder-*/
+          IB_DIR=$(find imagebuilder \
+            -maxdepth 1 \
+            -type d \
+            -name 'openwrt-imagebuilder-*' \
+            -print -quit)
+
+          if [ -z "$IB_DIR" ]; then
+            echo "ERROR: ImageBuilder directory not found"
+            exit 1
+          fi
+
+          cd "$IB_DIR"
 
           make image \
             PROFILE="generic" \
@@ -84,19 +112,20 @@ jobs:
             PACKAGES="luci luci-i18n-base-zh-cn luci-app-attendedsysupgrade" \
             FILES="$GITHUB_WORKSPACE/files"
 
+      # 5. Collect firmware
       - name: Collect firmware
         run: |
-          set -e
+          set -euo pipefail
 
           mkdir -p "$GITHUB_WORKSPACE/output"
 
           IMAGE=$(find imagebuilder \
             -type f \
-            -name '*combined-efi.img.gz' \
+            -name '*ext4-combined-efi.img.gz' \
             -print -quit)
 
           if [ -z "$IMAGE" ]; then
-            echo "ERROR: EFI firmware image not found"
+            echo "ERROR: EXT4 EFI firmware image not found"
             exit 1
           fi
 
@@ -106,18 +135,22 @@ jobs:
 
           sha256sum *.img.gz > sha256sums.txt
 
+          echo "Firmware generated successfully"
+
           ls -lh
 
+      # 6. Upload firmware artifact
       - name: Upload firmware
-        uses: actions/checkout@v7
+        uses: actions/upload-artifact@v6
         with:
           name: OpenWrt-25.12-x86_64-UEFI-EXT4-1GB
           path: output/*
           if-no-files-found: error
           retention-days: 14
-        
+
+      # 7. Publish GitHub Release
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: OpenWrt-${{ inputs.version }}-build-${{ github.run_id }}-${{ github.run_attempt }}
           name: OpenWrt ${{ inputs.version }} x86_64 UEFI EXT4 1GB
@@ -129,7 +162,9 @@ jobs:
             - Image: COMBINED-EFI
             - Filesystem: EXT4
             - Root filesystem target: 1024 MB
-            - LAN IP: 192.168.100.1
+            - LAN IP: 192.168.100.1/24
+            - LuCI: Chinese language package
+            - Attended Sysupgrade: Included
 
           files: |
             output/*.img.gz
