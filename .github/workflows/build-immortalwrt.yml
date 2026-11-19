@@ -1,5 +1,5 @@
 
-name: ImmortalWrt 25.12 x86_64
+name: Build ImmortalWrt x86_64
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
@@ -85,7 +85,7 @@ jobs:
           echo "tag=ImmortalWrt-${VERSION}-$(date -u +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
 
       - name: Publish to Releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ImmortalWrt ${{ env.VERSION }} x86_64
