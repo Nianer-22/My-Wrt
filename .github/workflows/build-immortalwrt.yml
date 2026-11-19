@@ -36,7 +36,8 @@ jobs:
             zstd \
             gzip \
             xz-utils \
-            qemu-utils
+            qemu-utils \
+            genisoimage
 
       # 2. Download ImageBuilder
       - name: Download ImageBuilder
