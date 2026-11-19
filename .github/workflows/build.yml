@@ -1,5 +1,5 @@
 
-name: OpenWrt 25.12 x86_64 Custom Build
+name: OpenWrt 25.12 x86_64
 
 on:
   workflow_dispatch:
