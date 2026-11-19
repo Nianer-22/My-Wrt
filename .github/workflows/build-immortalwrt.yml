@@ -16,24 +16,47 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
+      # 1. Install dependencies
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y zstd
+          sudo apt-get install -y \
+            build-essential \
+            libncurses-dev \
+            zlib1g-dev \
+            gawk \
+            gettext \
+            libssl-dev \
+            xsltproc \
+            rsync \
+            wget \
+            unzip \
+            python3 \
+            file \
+            zstd \
+            gzip \
+            xz-utils
 
+      # 2. Download ImageBuilder
       - name: Download ImageBuilder
         run: |
-          wget -q \
-          https://downloads.immortalwrt.org/releases/${VERSION}/targets/x86/64/immortalwrt-imagebuilder-${VERSION}-x86-64.Linux-x86_64.tar.zst \
-          -O imagebuilder.tar.zst
+          set -e
+
+          BUILDER="immortalwrt-imagebuilder-${VERSION}-x86-64.Linux-x86_64.tar.zst"
+
+          URL="https://downloads.immortalwrt.org/releases/${VERSION}/targets/x86/64/${BUILDER}"
+
+          wget -O imagebuilder.tar.zst "$URL"
 
           tar --zstd -xf imagebuilder.tar.zst
 
+          echo "ImageBuilder downloaded successfully"
+
+      # 3. Configure LAN
       - name: Configure LAN
         run: |
+          set -e
+
           mkdir -p files/etc/uci-defaults
 
           cat > files/etc/uci-defaults/99-custom-network <<'EOF'
@@ -46,20 +69,35 @@ jobs:
           exit 0
           EOF
 
-          chmod +x files/etc/uci-defaults/99-custom-network
+          chmod 755 files/etc/uci-defaults/99-custom-network
 
+      # 4. Build firmware
       - name: Build firmware
         run: |
-          cd immortalwrt-imagebuilder-*
+          set -e
+
+          IB_DIR=$(find . -maxdepth 1 -type d \
+            -name 'immortalwrt-imagebuilder-*' \
+            -print -quit)
+
+          if [ -z "$IB_DIR" ]; then
+            echo "ERROR: ImageBuilder directory not found"
+            exit 1
+          fi
+
+          cd "$IB_DIR"
 
           make image \
             PROFILE="generic" \
-            ROOTFS_PARTSIZE=${ROOTFS_PARTSIZE} \
+            ROOTFS_PARTSIZE="${ROOTFS_PARTSIZE}" \
             FILES="${GITHUB_WORKSPACE}/files" \
             PACKAGES="luci"
 
+      # 5. Check firmware
       - name: Check firmware
         run: |
+          set -e
+
           mkdir -p release
 
           find immortalwrt-imagebuilder-*/bin/targets/x86/64 \
@@ -67,37 +105,58 @@ jobs:
             -name '*squashfs-combined-efi.img.gz' \
             -exec cp {} release/ \;
 
-          test -n "$(find release -name '*.img.gz' -print -quit)"
+          IMAGE=$(find release -type f \
+            -name '*squashfs-combined-efi.img.gz' \
+            -print -quit)
+
+          if [ -z "$IMAGE" ]; then
+            echo "ERROR: SquashFS EFI firmware not found"
+            exit 1
+          fi
 
           cd release
+
           sha256sum *.img.gz > sha256sums.txt
 
+          echo "Firmware generated successfully"
+
+          ls -lh
+
+      # 6. Upload build artifact
       - name: Upload build artifact
-        uses: actions/checkout@v7
+        uses: actions/upload-artifact@v6
         with:
-          name: ImmortalWrt-x86_64
+          name: ImmortalWrt-x86_64-SquashFS
           path: release/*
+          if-no-files-found: error
           retention-days: 7
 
+      # 7. Generate release tag
       - name: Generate release tag
         id: tag
         run: |
-          echo "tag=ImmortalWrt-${VERSION}-$(date -u +%Y%m%d-%H%M)" >> "$GITHUB_OUTPUT"
+          echo "tag=ImmortalWrt-${VERSION}-build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
+      # 8. Publish GitHub Releases
       - name: Publish to Releases
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: ImmortalWrt ${{ env.VERSION }} x86_64
+          name: ImmortalWrt ${{ env.VERSION }} x86_64 UEFI SquashFS 1GB
           body: |
             ImmortalWrt x86_64 Custom Firmware
 
             Version: ${{ env.VERSION }}
             Architecture: x86_64
-            Filesystem: EXT4
+            Filesystem: SquashFS
             Boot: UEFI
-            Root filesystem partition: 1024 MB
+            Root filesystem partition target: 1024 MB
             LAN IP: 10.10.10.1/24
 
-          files: release/*
+          files: |
+            release/*.img.gz
+            release/sha256sums.txt
+
+          draft: false
+          prerelease: false
           generate_release_notes: true
