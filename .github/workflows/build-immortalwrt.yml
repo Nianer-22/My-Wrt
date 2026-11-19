@@ -1,5 +1,5 @@
 
-name: ImmortalWrt x86_64
+name: ImmortalWrt 25.12 x86_64
 
 on:
   workflow_dispatch:
