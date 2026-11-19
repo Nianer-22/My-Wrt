@@ -35,7 +35,8 @@ jobs:
             file \
             zstd \
             gzip \
-            xz-utils
+            xz-utils \
+            qemu-utils
 
       # 2. Download ImageBuilder
       - name: Download ImageBuilder
