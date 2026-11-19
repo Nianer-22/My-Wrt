@@ -1,20 +1,30 @@
 
 #!/bin/bash
+set -e
 
 # ==========================================
 # ImmortalWrt 25.12.2 X86_64
-# Custom configuration
+# Custom LAN configuration
 # ==========================================
 
-# Set default LAN IP
 LAN_IP="10.10.10.1"
 LAN_NETMASK="255.255.255.0"
 
-# Modify default LAN configuration
-sed -i "s/192\.168\.1\.1/${LAN_IP}/g" package/base-files/files/bin/config_generate
+# Create first-boot configuration directory
+mkdir -p files/etc/uci-defaults
 
-# Set default timezone
-sed -i "s/UTC/CST-8/g" package/base-files/files/bin/config_generate
+# Configure LAN IP on first boot
+cat > files/etc/uci-defaults/99-custom-network <<EOF
+#!/bin/sh
+
+uci set network.lan.ipaddr='${LAN_IP}'
+uci set network.lan.netmask='${LAN_NETMASK}'
+uci commit network
+
+exit 0
+EOF
+
+chmod 755 files/etc/uci-defaults/99-custom-network
 
 echo "======================================"
 echo "Custom configuration completed"
