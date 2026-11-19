@@ -17,13 +17,13 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      # 1. 获取自己的配置仓库
+      # 1. Checkout configuration repository
       - name: Checkout Configuration
         uses: actions/checkout@v4
         with:
           path: config-repo
 
-      # 2. 下载 ImmortalWrt 官方源码
+      # 2. Checkout ImmortalWrt source
       - name: Checkout ImmortalWrt
         uses: actions/checkout@v4
         with:
@@ -31,7 +31,7 @@ jobs:
           ref: v25.12.2
           path: openwrt
 
-      # 3. 安装编译依赖
+      # 3. Install build dependencies
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -49,8 +49,12 @@ jobs:
             libncurses-dev \
             libssl-dev \
             python3 \
+            python3-dev \
             python3-setuptools \
             python3-pyelftools \
+            python3-pip \
+            python3-ply \
+            python3-docutils \
             rsync \
             unzip \
             zlib1g-dev \
@@ -60,62 +64,98 @@ jobs:
             jq \
             zstd \
             swig \
-            time
+            time \
+            device-tree-compiler \
+            ecj \
+            libelf-dev \
+            libglib2.0-dev \
+            libgmp3-dev \
+            libmpc-dev \
+            libmpfr-dev \
+            libpython3-dev \
+            libreadline-dev \
+            libtool \
+            libyaml-dev \
+            pkgconf \
+            qemu-utils \
+            re2c \
+            squashfs-tools \
+            subversion
 
-      # 4. 更新软件源
+      # 4. Update feeds
       - name: Update Feeds
         working-directory: openwrt
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # 5. 导入固件配置
+      # 5. Load firmware configuration
       - name: Load Configuration
         working-directory: openwrt
         run: |
+          set -e
+
           test -f ../config-repo/config/seed.config
           test -f ../config-repo/scripts/diy-part1.sh
 
           cp ../config-repo/config/seed.config .config
 
-          chmod +x ../config-repo/scripts/diy-part1.sh
           bash ../config-repo/scripts/diy-part1.sh
 
           make defconfig
 
-      # 6. 下载编译所需源码包
+          echo "Checking firmware configuration..."
+
+          grep -Fx 'CONFIG_TARGET_x86_64=y' .config
+          grep -Fx 'CONFIG_TARGET_ROOTFS_EXT4FS=y' .config
+          grep -Fx 'CONFIG_TARGET_ROOTFS_PARTSIZE=1024' .config
+          grep -Fx 'CONFIG_GRUB_EFI_IMAGES=y' .config
+
+          echo "Configuration check passed!"
+
+      # 6. Download packages
       - name: Download Packages
         working-directory: openwrt
         run: |
           make download -j8
 
-      # 7. 编译固件
+      # 7. Compile firmware
       - name: Compile Firmware
         working-directory: openwrt
         run: |
-          make -j$(nproc) || make -j1 V=s
+          make -j"$(nproc)" || {
+            echo "Parallel build failed. Retrying with single thread..."
+            make -j1 V=s
+          }
 
-      # 8. 检查固件
+      # 8. Check firmware
       - name: Check Firmware
         run: |
+          set -e
+
           cd openwrt/bin/targets/x86/64
 
           ls -lh
 
           IMAGE=$(find . -maxdepth 1 \
-            -name '*ext4-combined-efi.img.gz' \
-            -type f | head -n 1)
+            -type f \
+            -name '*ext4-combined-efi.img.gz' | head -n 1)
 
           if [ -z "$IMAGE" ]; then
-            echo "ERROR: EFI EXT4 firmware not found!"
+            echo "ERROR: EXT4 EFI image not found!"
             exit 1
           fi
+
+          echo "Checking gzip integrity..."
+          gzip -t "$IMAGE"
 
           echo "Firmware found: $IMAGE"
 
           sha256sum "$IMAGE" > sha256sums.txt
 
-      # 9. 上传 GitHub Actions 构建产物
+          echo "Firmware verification completed!"
+
+      # 9. Upload build artifacts
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -128,11 +168,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # 10. 自动发布到 GitHub Releases
+      # 10. Release firmware
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: immortalwrt-25.12.2-${{ github.run_number }}
+          tag_name: immortalwrt-25.12.2-${{ github.run_id }}-${{ github.run_attempt }}
           name: ImmortalWrt 25.12.2 X86_64 Build ${{ github.run_number }}
           body: |
             ImmortalWrt 25.12.2
@@ -140,7 +180,7 @@ jobs:
             Architecture: x86_64
             Image: EXT4-COMBINED-EFI
             Boot: UEFI
-            RootFS: 1024 MB
+            RootFS partition: 1024 MB
             LAN: 10.10.10.1
 
             Automatically built by GitHub Actions.
