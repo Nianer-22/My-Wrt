@@ -1,4 +1,3 @@
-
 name: ImmortalWrt 25.12.2 X86_64 Build
 
 on:
@@ -17,11 +16,13 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      # 1. 获取自己的配置仓库
       - name: Checkout Configuration
         uses: actions/checkout@v4
         with:
           path: config-repo
 
+      # 2. 获取 ImmortalWrt 官方源码
       - name: Checkout ImmortalWrt
         uses: actions/checkout@v4
         with:
@@ -29,27 +30,55 @@ jobs:
           ref: v25.12.2
           path: openwrt
 
+      # 3. 安装编译依赖
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison g++ gawk \
-            gcc-multilib g++-multilib gettext git \
-            libncurses-dev libssl-dev libelf-dev \
-            python3 python3-dev python3-pip \
-            python3-setuptools python3-pyelftools \
-            python3-yaml python3-requests \
-            rsync unzip zlib1g-dev file wget curl \
-            jq zstd swig time device-tree-compiler \
-            qemu-utils subversion
 
+          sudo apt-get install -y \
+            build-essential \
+            clang \
+            flex \
+            bison \
+            g++ \
+            gawk \
+            gcc-multilib \
+            g++-multilib \
+            gettext \
+            git \
+            libncurses-dev \
+            libssl-dev \
+            zlib1g-dev \
+            libelf-dev \
+            libxml-parser-perl \
+            libxml2-utils \
+            libxslt1-dev \
+            libzstd-dev \
+            python3 \
+            python3-dev \
+            python3-setuptools \
+            python3-pyelftools \
+            python3-yaml \
+            rsync \
+            unzip \
+            file \
+            wget \
+            curl \
+            jq \
+            zstd \
+            swig \
+            time \
+            xsltproc \
+            device-tree-compiler
+
+      # 4. 更新软件源
       - name: Update Feeds
         working-directory: openwrt
         run: |
-          set -e
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      # 5. 导入配置并执行自定义脚本
       - name: Load Configuration
         working-directory: openwrt
         run: |
@@ -60,65 +89,105 @@ jobs:
 
           cp ../config-repo/config/seed.config .config
 
+          chmod +x ../config-repo/scripts/diy-part1.sh
           bash ../config-repo/scripts/diy-part1.sh
 
           make defconfig
 
-          echo "Checking configuration..."
+          echo "Checking build configuration..."
 
+          grep -Fx 'CONFIG_TARGET_x86=y' .config
           grep -Fx 'CONFIG_TARGET_x86_64=y' .config
           grep -Fx 'CONFIG_TARGET_ROOTFS_EXT4FS=y' .config
           grep -Fx 'CONFIG_TARGET_ROOTFS_PARTSIZE=1024' .config
           grep -Fx 'CONFIG_GRUB_EFI_IMAGES=y' .config
 
-          echo "Configuration check passed!"
+          echo "Build configuration check passed."
 
+      # 6. 下载编译所需源码包
       - name: Download Packages
         working-directory: openwrt
         run: |
           make download -j8
 
+      # 7. 编译固件
       - name: Compile Firmware
         working-directory: openwrt
         run: |
-          make -j"$(nproc)" || {
-            echo "Parallel compilation failed."
-            echo "Retrying with single thread..."
-            make -j1 V=s
-          }
+          make -j"$(nproc)" || make -j1 V=s
 
+      # 8. 检查固件并导出分区表
       - name: Check Firmware
+        shell: bash
         run: |
           set -euo pipefail
 
-          cd openwrt/bin/targets/x86/64
+          TARGET_DIR="$GITHUB_WORKSPACE/openwrt/bin/targets/x86/64"
 
-          IMAGE=$(find . -maxdepth 1 \
+          IMAGE=$(find "$TARGET_DIR" \
+            -maxdepth 1 \
             -type f \
             -name '*ext4-combined-efi.img.gz' \
-            | head -n 1)
+            -print -quit)
 
           if [ -z "$IMAGE" ]; then
-            echo "ERROR: EFI EXT4 image not found!"
-            ls -lh
+            echo "ERROR: EFI EXT4 firmware not found!"
             exit 1
           fi
 
-          echo "Firmware: $IMAGE"
+          echo "Firmware found: $IMAGE"
 
+          # 检查 gzip 文件完整性
           gzip -t "$IMAGE"
+          echo "GZIP integrity check passed."
 
-          sha256sum "$IMAGE" > sha256sums.txt
+          # 生成 SHA256
+          cd "$TARGET_DIR"
+          sha256sum "$(basename "$IMAGE")" > sha256sums.txt
 
-          gzip -dc "$IMAGE" > firmware.img
+          # 解压镜像，供分区表检查
+          RAW_IMAGE="$TARGET_DIR/firmware.img"
+          gzip -dc "$IMAGE" > "$RAW_IMAGE"
 
-          sfdisk --dump firmware.img > partition-table.txt
+          # 导出分区表
+          sfdisk --dump "$RAW_IMAGE" > partition-table.txt
 
           echo "Partition table:"
           cat partition-table.txt
 
-          echo "Firmware verification completed."
+          # 显示每个分区的容量
+          python3 - "$RAW_IMAGE" <<'PY'
+          import json
+          import subprocess
+          import sys
 
+          image = sys.argv[1]
+
+          result = subprocess.run(
+              ["sfdisk", "--json", image],
+              check=True,
+              capture_output=True,
+              text=True
+          )
+
+          data = json.loads(result.stdout)
+          table = data["partitiontable"]
+          sector_size = table.get("sectorsize", 512)
+
+          print("\nPartition sizes:")
+          for part in table.get("partitions", []):
+              size_bytes = int(part["size"]) * sector_size
+              size_mib = size_bytes / (1024 * 1024)
+              print(
+                  f'{part["node"]}: '
+                  f'{size_mib:.2f} MiB '
+                  f'(type: {part.get("type", "unknown")})'
+              )
+          PY
+
+          echo "Firmware checks completed."
+
+      # 9. 上传 GitHub Actions 构建产物
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -132,8 +201,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # 10. 自动发布到 GitHub Releases
       - name: Release Firmware
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: immortalwrt-25.12.2-${{ github.run_id }}-${{ github.run_attempt }}
           name: ImmortalWrt 25.12.2 X86_64 Build ${{ github.run_number }}
@@ -143,9 +213,11 @@ jobs:
             Architecture: x86_64
             Image: EXT4-COMBINED-EFI
             Boot: UEFI
-            RootFS partition target: 1024 MB
+
+            Configured RootFS partition size: 1024 MB
             LAN: 10.10.10.1
 
+            Partition information is included in partition-table.txt.
             Automatically built by GitHub Actions.
           files: |
             openwrt/bin/targets/x86/64/*ext4-combined-efi.img.gz
