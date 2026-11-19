@@ -117,19 +117,19 @@ jobs:
         run: |
           make -j"$(nproc)" || make -j1 V=s
 
-      # 8. 检查固件并导出分区表
+      # 8. 检查固件并分析分区容量
       - name: Check Firmware
-        shell: bash
         run: |
           set -euo pipefail
 
-          TARGET_DIR="$GITHUB_WORKSPACE/openwrt/bin/targets/x86/64"
+          cd openwrt/bin/targets/x86/64
 
-          IMAGE=$(find "$TARGET_DIR" \
-            -maxdepth 1 \
-            -type f \
+          echo "===== Firmware files ====="
+          ls -lh
+
+          IMAGE=$(find . -maxdepth 1 \
             -name '*ext4-combined-efi.img.gz' \
-            -print -quit)
+            -type f | head -n 1)
 
           if [ -z "$IMAGE" ]; then
             echo "ERROR: EFI EXT4 firmware not found!"
@@ -140,53 +140,50 @@ jobs:
 
           # 检查 gzip 文件完整性
           gzip -t "$IMAGE"
-          echo "GZIP integrity check passed."
 
           # 生成 SHA256
-          cd "$TARGET_DIR"
-          sha256sum "$(basename "$IMAGE")" > sha256sums.txt
+          sha256sum "$IMAGE" > sha256sums.txt
 
-          # 解压镜像，供分区表检查
-          RAW_IMAGE="$TARGET_DIR/firmware.img"
+          # 解压固件镜像
+          RAW_IMAGE="${IMAGE%.gz}"
           gzip -dc "$IMAGE" > "$RAW_IMAGE"
 
-          # 导出分区表
+          # 导出原始分区表
           sfdisk --dump "$RAW_IMAGE" > partition-table.txt
 
-          echo "Partition table:"
+          # 计算每个分区的实际容量
+          {
+            echo ""
+            echo "===== Partition Size Report ====="
+
+            sfdisk --json "$RAW_IMAGE" | jq -r '
+              .partitiontable as $pt |
+              "Device: \($pt.device)",
+              "Partition table: \($pt.label)",
+              "Sector size: \($pt.sectorsize) bytes",
+              "",
+              "Node\tStart sector\tSectors\tSize (MiB)\tType\tName",
+              (
+                $pt.partitions[] |
+                [
+                  .node,
+                  (.start | tostring),
+                  (.size | tostring),
+                  ((.size * $pt.sectorsize / 1048576 * 100 | round) / 100 | tostring),
+                  (.type // "-"),
+                  (.name // "-")
+                ] | @tsv
+              )
+            '
+          } >> partition-table.txt
+
+          echo "===== Partition Table ====="
           cat partition-table.txt
 
-          # 显示每个分区的容量
-          python3 - "$RAW_IMAGE" <<'PY'
-          import json
-          import subprocess
-          import sys
+          # 删除临时解压镜像，保留压缩固件
+          rm -f "$RAW_IMAGE"
 
-          image = sys.argv[1]
-
-          result = subprocess.run(
-              ["sfdisk", "--json", image],
-              check=True,
-              capture_output=True,
-              text=True
-          )
-
-          data = json.loads(result.stdout)
-          table = data["partitiontable"]
-          sector_size = table.get("sectorsize", 512)
-
-          print("\nPartition sizes:")
-          for part in table.get("partitions", []):
-              size_bytes = int(part["size"]) * sector_size
-              size_mib = size_bytes / (1024 * 1024)
-              print(
-                  f'{part["node"]}: '
-                  f'{size_mib:.2f} MiB '
-                  f'(type: {part.get("type", "unknown")})'
-              )
-          PY
-
-          echo "Firmware checks completed."
+          echo "Firmware check completed!"
 
       # 9. 上传 GitHub Actions 构建产物
       - name: Upload Build Artifacts
@@ -206,19 +203,21 @@ jobs:
       - name: Release Firmware
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: immortalwrt-25.12.2-${{ github.run_id }}-${{ github.run_attempt }}
+          tag_name: immortalwrt-25.12.2-${{ github.run_number }}
           name: ImmortalWrt 25.12.2 X86_64 Build ${{ github.run_number }}
           body: |
             ImmortalWrt 25.12.2
 
             Architecture: x86_64
+
             Image: EXT4-COMBINED-EFI
+
             Boot: UEFI
 
-            Configured RootFS partition size: 1024 MB
+            RootFS: 1024 MB
+
             LAN: 10.10.10.1
 
-            Partition information is included in partition-table.txt.
             Automatically built by GitHub Actions.
           files: |
             openwrt/bin/targets/x86/64/*ext4-combined-efi.img.gz
