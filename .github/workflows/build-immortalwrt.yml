@@ -73,7 +73,7 @@ jobs:
           sha256sum *.img.gz > sha256sums.txt
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/checkout@v7
         with:
           name: ImmortalWrt-x86_64
           path: release/*
